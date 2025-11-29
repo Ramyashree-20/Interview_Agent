@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Groq Interview Agent (High Speed)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #e5e7eb; }
+        .chat-container {
+            height: 60vh;
+            overflow-y: auto;
+            background-color: #f9fafb;
+            border-radius: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .ai-message {
+            background-color: #dbf0ff;
+            border-radius: 1rem 1rem 1rem 0.2rem;
+            max-width: 80%;
+            align-self: flex-start;
+        }
+        .user-message {
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 1rem 1rem 0.2rem 1rem;
+            max-width: 80%;
+            align-self: flex-end;
+        }
+        .ai-title { color: #1e40af; font-weight: 600; }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex items-center justify-center">
+    <div id="app" class="w-full max-w-4xl bg-white p-6 md:p-10 rounded-2xl shadow-2xl space-y-6">
+        <h1 class="text-3xl font-extrabold text-gray-800 text-center border-b pb-3 mb-4">⚡ Groq Interview Agent</h1>
+
+        <div id="setupArea" class="space-y-4 p-4 border border-indigo-200 rounded-xl bg-indigo-50">
+            <label for="roleInput" class="block text-lg font-bold text-indigo-800">1. Specify the Job Role/Topic:</label>
+            <input type="text" id="roleInput" class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 shadow-sm" placeholder="e.g., 'Senior Python Developer' or 'Introductory Physics'">
+            <button id="startInterviewBtn" class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold text-lg hover:bg-indigo-700 transition duration-200 shadow-md">Start Interview</button>
+        </div>
+
+        <div id="interviewArea" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-gray-700">Interview for: <span id="currentRole" class="text-indigo-600"></span></h2>
+                <button id="endInterviewBtn" class="bg-red-500 text-white py-2 px-4 rounded-lg font-medium hover:bg-red-600 transition duration-200 shadow-sm">End Interview & Get Feedback</button>
+            </div>
+
+            <div id="chatLog" class="chat-container p-4 shadow-inner"></div>
+
+            <div class="mt-4 flex space-x-3 items-end">
+                <textarea id="answerInput" rows="3" class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 shadow-sm" placeholder="Type your answer here..."></textarea>
+                <div class="flex flex-col space-y-2 w-1/4 max-w-[120px]">
+                    <button id="sendAnswerBtn" class="bg-green-600 text-white py-2 rounded-xl font-bold hover:bg-green-700 transition duration-200 shadow-md disabled:bg-green-400">Send</button>
+                    <button id="showExampleBtn" class="bg-yellow-500 text-white py-2 rounded-xl font-bold hover:bg-yellow-600 transition duration-200 shadow-md disabled:bg-gray-400 text-sm">✨ Show Example</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="loadingIndicator" class="hidden text-center text-indigo-600 font-medium pt-2">
+            <div class="flex items-center justify-center space-x-2">
+                <svg class="animate-spin h-6 w-6 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>The Groq Agent is generating a response...</span>
+            </div>
+        </div>
+
+        <div id="customModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4">
+            <div class="bg-white p-8 rounded-xl shadow-2xl max-w-lg w-full space-y-4">
+                <h3 id="modalTitle" class="text-2xl font-bold text-gray-800"></h3>
+                <p id="modalMessage" class="whitespace-pre-wrap text-gray-700"></p>
+                <button id="closeModalBtn" class="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 transition duration-200">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM
+        const roleInput = document.getElementById('roleInput');
+        const startInterviewBtn = document.getElementById('startInterviewBtn');
+        const endInterviewBtn = document.getElementById('endInterviewBtn');
+        const setupArea = document.getElementById('setupArea');
+        const interviewArea = document.getElementById('interviewArea');
+        const currentRole = document.getElementById('currentRole');
+        const chatLog = document.getElementById('chatLog');
+        const answerInput = document.getElementById('answerInput');
+        const sendAnswerBtn = document.getElementById('sendAnswerBtn');
+        const showExampleBtn = document.getElementById('showExampleBtn');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const customModal = document.getElementById('customModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const closeModalBtn = document.getElementById('closeModalBtn');
+        const GROQ_MODEL = 'llama-3.1-8b-instant';
+        const MAX_QUESTIONS = 5;
+        let jobRole = '';
+        let conversationHistory = [];
+        let questionCount = 0;
+        function appendMessage(sender, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `p-4 shadow-md text-sm ${sender === 'assistant' ? 'ai-message' : 'user-message'}`;
+            if (sender === 'assistant') {
+                messageDiv.innerHTML = `<span class="ai-title">Interviewer:</span><p class="mt-1">${text}</p>`;
+            } else {
+                messageDiv.innerHTML = `<span class="font-semibold text-gray-600">You:</span><p class="mt-1">${text}</p>`;
+            }
+            chatLog.appendChild(messageDiv);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        function showModal(title, message) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            customModal.classList.remove('hidden');
+        }
+        closeModalBtn.onclick = () => customModal.classList.add('hidden');
+
+        function setLoading(isLoading) {
+            loadingIndicator.classList.toggle('hidden', !isLoading);
+            startInterviewBtn.disabled = isLoading;
+            sendAnswerBtn.disabled = isLoading;
+            showExampleBtn.disabled = isLoading;
+            endInterviewBtn.disabled = isLoading;
+            roleInput.disabled = isLoading;
+            answerInput.disabled = isLoading;
+        }
+
+        async function callGroqApi(messages) {
+            setLoading(true);
+
+            const payload = { messages: messages, model: GROQ_MODEL, temperature: 0.7 };
+            const maxRetries = 4;
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const res = await fetch('/api/ask', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!res.ok) {
+                        const errBody = await res.json().catch(() => ({ error: res.statusText }));
+                        const errMsg = errBody.error || res.statusText;
+                        if (res.status === 401) throw new Error('Authorization Error (401): Invalid or missing API key on server.');
+                        throw new Error(`Server returned ${res.status}: ${errMsg}`);
+                    }
+
+                    const json = await res.json();
+                    const text = json.choices?.[0]?.message?.content;
+                    if (!text) throw new Error('Malformed response from server / Groq API.');
+
+                    setLoading(false);
+                    return text;
+
+                } catch (err) {
+                    console.error(`Attempt ${attempt} failed:`, err);
+                    if (attempt === maxRetries) {
+                        setLoading(false);
+                        showModal("API Error", `Failed after ${maxRetries} attempts: ${err.message}`);
+                        throw err;
+                    }
+                    // exponential backoff
+                    await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+                }
+            }
+        }
+
+        async function startInterview() {
+            jobRole = roleInput.value.trim();
+            if (!jobRole) return showModal("Input Required", "Please enter a job role or topic before starting the interview.");
+
+            conversationHistory = [];
+            questionCount = 0;
+            chatLog.innerHTML = '';
+            currentRole.textContent = jobRole;
+
+            setupArea.classList.add('hidden');
+            interviewArea.classList.remove('hidden');
+
+            const systemPrompt = {
+                role: 'system',
+                content: `You are an AI Interview Agent specialized in interviewing for the role of '${jobRole}'. Your goal is to conduct a professional, structured interview. Start by asking the first essential question for this role, tailored to test deep knowledge and problem-solving skills. Your response must ONLY be the question, without greetings, pre-amble, or any conversational filler. You are the interviewer.`
+            };
+            const userQuery = { role: 'user', content: `Start the interview for a ${jobRole}.` };
+
+            try {
+                const question = await callGroqApi([systemPrompt, userQuery]);
+                conversationHistory.push({ role: 'assistant', content: question });
+                questionCount++;
+                appendMessage('assistant', question);
+            } catch (err) {
+                console.error("Interview start failed:", err);
+                setupArea.classList.remove('hidden');
+                interviewArea.classList.add('hidden');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function sendAnswer() {
+            const answer = answerInput.value.trim();
+            if (!answer) return showModal("Input Required", "Please enter your answer before sending.");
+
+            appendMessage('user', answer);
+            conversationHistory.push({ role: 'user', content: answer });
+            answerInput.value = '';
+
+            if (questionCount >= MAX_QUESTIONS) {
+                await concludeInterview();
+                return;
+            }
+
+            const interviewSystemPrompt = {
+                role: 'system',
+                content: `This is a continuation of an interview for the role of '${jobRole}'. The full chat history is provided. Based on the user's last response, either ask a logical follow-up question to probe deeper, or transition to a new, relevant question for this role. Do NOT provide feedback or a conclusion. Your response must ONLY be the next question.`
+            };
+
+            const messages = [interviewSystemPrompt, ...conversationHistory];
+
+            try {
+                const nextQuestion = await callGroqApi(messages);
+                conversationHistory.push({ role: 'assistant', content: nextQuestion });
+                questionCount++;
+                appendMessage('assistant', nextQuestion);
+            } catch (err) {
+                console.error("Error fetching next question:", err);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function showExampleAnswer() {
+            const lastQuestion = conversationHistory.filter(msg => msg.role === 'assistant').pop();
+            if (!lastQuestion) return showModal("Information", "Please start the interview first to get a question.");
+
+            const currentQuestion = lastQuestion.content;
+            const exampleSystemPrompt = {
+                role: 'system',
+                content: `You are an expert candidate for the role of '${jobRole}'. Provide a comprehensive, high-quality, and concise example answer to the following interview question. Frame the answer professionally and clearly. Use Markdown formatting. Do NOT include any introductory phrases.`
+            };
+            const userQuery = { role: 'user', content: `The question is: "${currentQuestion}"` };
+
+            try {
+                const exampleAnswer = await callGroqApi([exampleSystemPrompt, userQuery]);
+                showModal(`✨ Example Answer for ${jobRole}`, `Question:\n"${currentQuestion}"\n\n---\n\nExample Response:\n${exampleAnswer}`);
+            } catch (err) {
+                console.error("Error fetching example answer:", err);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function concludeInterview() {
+            const historyText = conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join('\n');
+            const conclusionSystemPrompt = {
+                role: 'system',
+                content: `The interview for the role of '${jobRole}' is now complete. Based on the entire conversation history provided, give constructive, professional feedback. Your response must contain the following sections (use Markdown headings): 1. Summary of Performance, 2. Strengths, 3. Areas for Improvement, and 4. Final Recommendation (Hire/Do Not Hire, and why).`
+            };
+            const userQuery = { role: 'user', content: `The interview is over. Please generate the final feedback based on this history:\n${historyText}` };
+
+            try {
+                const feedback = await callGroqApi([conclusionSystemPrompt, userQuery]);
+                appendMessage('assistant', "--- Interview Concluded. Generating Feedback ---");
+                appendMessage('assistant', feedback);
+                showModal("Interview Feedback for " + jobRole, feedback);
+
+                sendAnswerBtn.disabled = true;
+                answerInput.disabled = true;
+                endInterviewBtn.disabled = true;
+                showExampleBtn.disabled = true;
+            } catch (err) {
+                console.error("Error concluding interview:", err);
+            } finally {
+                setLoading(false);
+            }
+        }
+        startInterviewBtn.addEventListener('click', startInterview);
+        endInterviewBtn.addEventListener('click', concludeInterview);
+        sendAnswerBtn.addEventListener('click', sendAnswer);
+        showExampleBtn.addEventListener('click', showExampleAnswer);
+        answerInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendAnswer();
+            }
+        });
+
+        window.onload = () => { roleInput.value = "React Frontend Developer"; };
+    </script>
+</body>
+</html>
